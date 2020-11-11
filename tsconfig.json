@@ -33,5 +33,6 @@
   "include": [
     "./src/**/*.tsx",
     "./src/**/*.ts"
-  ]
+  ],
+  "files": ["./src/index.d.ts"]
 }
