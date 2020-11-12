@@ -129,4 +129,18 @@ export class UserResolver {
     req!.session!.userId = user.id;
     return { user };
   }
+  @Mutation(() => Boolean, { nullable: true })
+  logout(@Ctx() { req, res }: MyContext) {
+    return new Promise((_res) =>
+      req.session.destroy((err) => {
+        if (err) {
+          console.log(err);
+          _res(false);
+          return;
+        }
+        res.clearCookie("qid");
+        _res(true);
+      })
+    );
+  }
 }
