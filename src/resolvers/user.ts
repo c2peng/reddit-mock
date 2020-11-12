@@ -3,7 +3,6 @@ import { MyContext } from "src/types";
 import {
   Resolver,
   Mutation,
-  InputType,
   Field,
   Ctx,
   Arg,
@@ -11,20 +10,13 @@ import {
   Query,
 } from "type-graphql";
 import argon2 from "argon2";
+import { UsernamePasswordInput } from "../utils/UsernamePasswordInput";
+import { validateRegister } from "src/utils/validateRegister";
 
 declare module "express-session" {
   interface SessionData {
     views: number;
   }
-}
-
-@InputType()
-class UsernamePasswordInput {
-  @Field()
-  username: string;
-
-  @Field()
-  password: string;
 }
 
 @ObjectType()
@@ -47,8 +39,16 @@ class UserResponse {
 
 @Resolver()
 export class UserResolver {
+  @Mutation(() => Boolean)
+  async forgotPassword(
+    @Arg("email") email: string,
+    @Ctx() { em }: MyContext
+  ): Promise<boolean> {
+    //const person = await em.findOne(User, {email});
+    return true;
+  }
   @Query(() => User, { nullable: true })
-  async me(@Ctx() { req, em }: MyContext) {
+  async me(@Ctx() { req, em }: MyContext): Promise<User | null> {
     //not logged in
     if (!req.session.userId) return null;
     const user = await em.findOne(User, { id: req.session.userId });
@@ -59,26 +59,8 @@ export class UserResolver {
     @Arg("options") options: UsernamePasswordInput,
     @Ctx() { em, req }: MyContext
   ): Promise<UserResponse> {
-    if (options.username.length <= 2) {
-      return {
-        errors: [
-          {
-            field: "username",
-            message: "username length must be greater than 2",
-          },
-        ],
-      };
-    }
-    if (options.password.length <= 2) {
-      return {
-        errors: [
-          {
-            field: "password",
-            message: "password length must be greater than 2",
-          },
-        ],
-      };
-    }
+    const errors = validateRegister(options);
+    if (errors) return {errors}
     const dupUser = await em.findOne(User, { username: options.username });
     if (dupUser)
       return {
@@ -93,6 +75,7 @@ export class UserResolver {
     const user = em.create(User, {
       username: options.username,
       password: hashedPassword,
+      email: options.email,
     });
     await em.persistAndFlush(user);
     req.session.userId = user.id;
@@ -101,10 +84,16 @@ export class UserResolver {
 
   @Mutation(() => UserResponse)
   async login(
-    @Arg("options") options: UsernamePasswordInput,
+    @Arg("usernameOrEmail") UsernameOrEmail: string,
+    @Arg("password") password: string,
     @Ctx() { em, req }: MyContext
   ): Promise<UserResponse> {
-    const user = await em.findOne(User, { username: options.username });
+    const user = await em.findOne(
+      User,
+      UsernameOrEmail.includes("@")
+        ? { email: UsernameOrEmail }
+        : { username: UsernameOrEmail }
+    );
     if (!user) {
       return {
         errors: [
@@ -115,7 +104,7 @@ export class UserResolver {
         ],
       };
     }
-    const valid = await argon2.verify(user.password, options.password);
+    const valid = await argon2.verify(user.password, password);
     if (!valid) {
       return {
         errors: [
@@ -130,7 +119,7 @@ export class UserResolver {
     return { user };
   }
   @Mutation(() => Boolean, { nullable: true })
-  logout(@Ctx() { req, res }: MyContext) {
+  logout(@Ctx() { req, res }: MyContext): Promise<Boolean | null> {
     return new Promise((_res) =>
       req.session.destroy((err) => {
         if (err) {
@@ -140,6 +129,7 @@ export class UserResolver {
         }
         res.clearCookie("qid");
         _res(true);
+        return;
       })
     );
   }
