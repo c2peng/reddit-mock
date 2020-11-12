@@ -69,6 +69,16 @@ export class UserResolver {
 				],
 			};
 		}
+		if (options.password.length <= 2) {
+			return {
+				errors: [
+					{
+						field: "password",
+						message: "password length must be greater than 2",
+					},
+				],
+			};
+		}
 		const dupUser = await em.findOne(User, { username: options.username });
 		if (dupUser)
 			return {
