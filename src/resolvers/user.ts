@@ -15,6 +15,7 @@ import { validateRegister } from "../utils/validateRegister";
 import { sendEmail } from "../utils/sendEmail";
 import { v4 } from "uuid";
 import { FORGET_PASSWORD_PREFIX } from "../constants";
+import { getConnection } from "typeorm";
 
 @ObjectType()
 class FieldError {
@@ -40,7 +41,7 @@ export class UserResolver {
   async changePassword(
     @Arg("token") token: string,
     @Arg("newPassword") newPassword: string,
-    @Ctx() { req, redis, em }: MyContext
+    @Ctx() { req, redis }: MyContext
   ): Promise<UserResponse> {
     if (newPassword.length <= 2)
       return {
@@ -52,14 +53,14 @@ export class UserResolver {
     if (!userId)
       return { errors: [{ field: "token", message: "token expired" }] };
 
-    const user = await em.findOne(User, { id: parseInt(userId) });
+    const user = await User.findOne(parseInt(userId));
     if (!user) {
       return { errors: [{ field: "token", message: "user no longer exists" }] };
     }
 
     user.password = await argon2.hash(newPassword);
 
-    await em.persistAndFlush(user);
+    await User.update({ id: parseInt(userId) }, { password: newPassword });
 
     redis.del(FORGET_PASSWORD_PREFIX + token);
 
@@ -71,9 +72,9 @@ export class UserResolver {
   @Mutation(() => Boolean)
   async forgotPassword(
     @Arg("email") email: string,
-    @Ctx() { em, redis }: MyContext
+    @Ctx() { redis }: MyContext
   ): Promise<boolean> {
-    const person = await em.findOne(User, { email });
+    const person = await User.findOne({ where: { email } });
     if (!person) {
       return true;
     }
@@ -94,20 +95,21 @@ export class UserResolver {
     return true;
   }
   @Query(() => User, { nullable: true })
-  async me(@Ctx() { req, em }: MyContext): Promise<User | null> {
+  me(@Ctx() { req }: MyContext) {
     //not logged in
     if (!req.session.userId) return null;
-    const user = await em.findOne(User, { id: req.session.userId });
-    return user;
+    return User.findOne(req.session.userId);
   }
   @Mutation(() => UserResponse)
   async register(
     @Arg("options") options: UsernamePasswordInput,
-    @Ctx() { em, req }: MyContext
+    @Ctx() { req }: MyContext
   ): Promise<UserResponse> {
     const errors = validateRegister(options);
     if (errors) return { errors };
-    const dupUser = await em.findOne(User, { username: options.username });
+    const dupUser = await User.findOne({
+      where: { username: options.username },
+    });
     if (dupUser)
       return {
         errors: [
@@ -117,13 +119,34 @@ export class UserResolver {
           },
         ],
       };
+    let user;
     const hashedPassword = await argon2.hash(options.password);
-    const user = em.create(User, {
-      username: options.username,
-      password: hashedPassword,
-      email: options.email,
-    });
-    await em.persistAndFlush(user);
+    try {
+      const result = await getConnection()
+        .createQueryBuilder()
+        .insert()
+        .into(User)
+        .values({
+          username: options.username,
+          email: options.email,
+          password: hashedPassword,
+        })
+        .returning("*")
+        .execute();
+      user = result.raw[0];
+    } catch (err) {
+      console.log(err);
+      if (err.code === "23505") {
+        return {
+          errors: [
+            {
+              field: "username",
+              message: "username already taken",
+            },
+          ],
+        };
+      }
+    }
     req.session.userId = user.id;
     return { user };
   }
@@ -132,13 +155,12 @@ export class UserResolver {
   async login(
     @Arg("usernameOrEmail") UsernameOrEmail: string,
     @Arg("password") password: string,
-    @Ctx() { em, req }: MyContext
+    @Ctx() { req }: MyContext
   ): Promise<UserResponse> {
-    const user = await em.findOne(
-      User,
+    const user = await User.findOne(
       UsernameOrEmail.includes("@")
-        ? { email: UsernameOrEmail }
-        : { username: UsernameOrEmail }
+        ? { where: { email: UsernameOrEmail } }
+        : { where: { username: UsernameOrEmail } }
     );
     if (!user) {
       return {
