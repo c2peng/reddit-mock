@@ -11,13 +11,10 @@ import {
 } from "type-graphql";
 import argon2 from "argon2";
 import { UsernamePasswordInput } from "../utils/UsernamePasswordInput";
-import { validateRegister } from "src/utils/validateRegister";
-
-declare module "express-session" {
-  interface SessionData {
-    views: number;
-  }
-}
+import { validateRegister } from "../utils/validateRegister";
+import { sendEmail } from "../utils/sendEmail";
+import { v4 } from "uuid";
+import { FORGET_PASSWORD_PREFIX } from "../constants";
 
 @ObjectType()
 class FieldError {
@@ -42,9 +39,26 @@ export class UserResolver {
   @Mutation(() => Boolean)
   async forgotPassword(
     @Arg("email") email: string,
-    @Ctx() { em }: MyContext
+    @Ctx() { em, redis }: MyContext
   ): Promise<boolean> {
-    //const person = await em.findOne(User, {email});
+    const person = await em.findOne(User, { email });
+    if (!person) {
+      return true;
+    }
+
+    const token = v4();
+
+    await redis.set(
+      FORGET_PASSWORD_PREFIX + token,
+      person.id,
+      "ex",
+      1000 * 60 * 60 * 3 * 24
+    );
+
+    await sendEmail(
+      email,
+      `<a href='http://localhost:3000/change-password/${token}'>reset password</a>`
+    );
     return true;
   }
   @Query(() => User, { nullable: true })
@@ -60,7 +74,7 @@ export class UserResolver {
     @Ctx() { em, req }: MyContext
   ): Promise<UserResponse> {
     const errors = validateRegister(options);
-    if (errors) return {errors}
+    if (errors) return { errors };
     const dupUser = await em.findOne(User, { username: options.username });
     if (dupUser)
       return {
@@ -98,7 +112,7 @@ export class UserResolver {
       return {
         errors: [
           {
-            field: "username",
+            field: "usernameOrEmail",
             message: "username doesnt exist",
           },
         ],
