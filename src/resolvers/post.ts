@@ -111,10 +111,16 @@ export class PostResolver {
     const realLimit = Math.min(50, limit);
     const reaLimitPlusOne = realLimit + 1;
 
-    const replacements: any[] = [reaLimitPlusOne, req.session.userId];
+    const replacements: any[] = [reaLimitPlusOne];
 
+    if (req.session.userId) {
+      replacements.push(req.session.userId);
+    }
+
+    let cursorIdx = 3;
     if (cursor) {
       replacements.push(new Date(parseInt(cursor)));
+      cursorIdx = replacements.length;
     }
 
     const posts = await getConnection().query(
@@ -129,15 +135,16 @@ export class PostResolver {
       ) creator,
     ${
       req.session.userId
-        ? `(select value from updoot where "userId" = ${req.session.userId}  and "postId" = p.id) "voteStatus"`
-        : `null as "voteStatus"`
+        ? '(select value from updoot where "userId" = $2 and "postId" = p.id) "voteStatus"'
+        : 'null as "voteStatus"'
     }
     from post p
     inner join public.user u on u.id = p."creatorId"
-    ${cursor ? `where p."createdAt" < ${new Date(parseInt(cursor))}` : ""}
+    ${cursor ? `where p."createdAt" < $${cursorIdx}` : ""}
     order by p."createdAt" DESC
-    limit ${realLimit + 1}
-    `
+    limit $1
+    `,
+      replacements
     );
     return {
       posts: posts.slice(0, realLimit),
@@ -147,7 +154,7 @@ export class PostResolver {
 
   @Query(() => Post, { nullable: true })
   post(@Arg("id", () => Int) id: number): Promise<Post | undefined> {
-    return Post.findOne(id);
+    return Post.findOne(id, { relations: ["creator"] });
   }
 
   @Mutation(() => Post)
@@ -183,8 +190,9 @@ export class PostResolver {
   }
 
   @Mutation(() => Boolean)
-  async deletePost(@Arg("id", () => Int) id: number): Promise<boolean> {
-    await Post.delete(id);
+  @UseMiddleware(isAuth)
+  async deletePost(@Arg("id",() => Int) id: number, @Ctx() {req}: MyContext): Promise<boolean> {
+    await Post.delete({id, creatorId: req.session.userId});
     return true;
   }
 }
